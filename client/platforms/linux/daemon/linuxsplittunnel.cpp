@@ -4,8 +4,10 @@
 
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QProcess>
 #include <QRegularExpression>
+#include <QSet>
 
 namespace {
 Logger logger("LinuxSplitTunnel");
@@ -30,6 +32,22 @@ QString cgroupProcsFile() {
 
 int sh(const QString& cmd) {
     return QProcess::execute("/bin/bash", {"-c", cmd});
+}
+
+qint64 parentPid(qint64 pid) {
+    QFile status(QStringLiteral("/proc/%1/status").arg(pid));
+    if (!status.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return -1;
+    }
+
+    while (!status.atEnd()) {
+        const QByteArray line = status.readLine();
+        if (line.startsWith("PPid:")) {
+            return QString::fromLatin1(line.mid(5)).trimmed().toLongLong();
+        }
+    }
+
+    return -1;
 }
 }
 
@@ -114,10 +132,6 @@ void LinuxSplitTunnel::setupNetworking() {
                .arg(id, tag));
     }
 
-    // Ensure the table name is registered (ip commands reject unknown names)
-    sh(QStringLiteral("grep -q '%1' /etc/iproute2/rt_tables"
-                      " || echo '10011 %1' >> /etc/iproute2/rt_tables").arg(tbl));
-
     // Common: routing rule and filter accept rule
     sh(QStringLiteral("ip rule list | grep -q 'fwmark %1' || ip rule add from all fwmark %1 lookup %2 pri 100")
            .arg(tag, tbl));
@@ -176,15 +190,40 @@ void LinuxSplitTunnel::scanAndAssignProcesses() {
 
     const QDir procDir("/proc");
     const QStringList entries = procDir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+    QSet<qint64> excludedPids;
+    QMultiHash<qint64, qint64> childrenByParent;
+
     for (const QString& entry : entries) {
         bool ok;
         const qint64 pid = entry.toLongLong(&ok);
         if (!ok || pid <= 0) continue;
 
         const QString exePath = QFile::symLinkTarget(QStringLiteral("/proc/%1/exe").arg(pid));
-        if (!exePath.isEmpty() && m_excludedAppPaths.contains(exePath)) {
-            assignPid(pid);
+        const qint64 ppid = parentPid(pid);
+        if (ppid > 0) {
+            childrenByParent.insert(ppid, pid);
         }
+
+        if (!exePath.isEmpty() && m_excludedAppPaths.contains(exePath)) {
+            excludedPids.insert(pid);
+        }
+    }
+
+    QList<qint64> queue = excludedPids.values();
+    for (qsizetype i = 0; i < queue.size(); ++i) {
+        const qint64 parent = queue.at(i);
+        const QList<qint64> children = childrenByParent.values(parent);
+        for (const qint64 child : children) {
+            if (excludedPids.contains(child)) {
+                continue;
+            }
+            excludedPids.insert(child);
+            queue.append(child);
+        }
+    }
+
+    for (const qint64 pid : queue) {
+        assignPid(pid);
     }
 }
 

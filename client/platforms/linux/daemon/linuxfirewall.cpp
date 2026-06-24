@@ -32,6 +32,7 @@
 
 #include "linuxfirewall.h"
 #include "logger.h"
+#include <QFile>
 #include <QProcess>
 
 #define BRAND_CODE "amn"
@@ -49,9 +50,33 @@ const QString enabledKeyTemplate = "enabled:%1:%2";
 const QString disabledKeyTemplate = "disabled:%1:%2";
 const QString kVpnGroupName = BRAND_CODE "vpn";
 QHash<QString, LinuxFirewall::FilterCallbackFunc> anchorCallbacks;
+
+bool isCgroupV2()
+{
+    return !QFile::exists(QStringLiteral("/sys/fs/cgroup/net_cls"));
 }
 
-QString LinuxFirewall::kRtableName = QStringLiteral("%1rt").arg(kAnchorName);
+QString cgroupV2Dir()
+{
+    return QStringLiteral("/sys/fs/cgroup/%1vpnexclusions").arg(BRAND_CODE);
+}
+
+QString cgroupV2KernelPath()
+{
+    return QStringLiteral("/%1vpnexclusions").arg(BRAND_CODE);
+}
+
+QString cgroupMatchRule()
+{
+    if (isCgroupV2()) {
+        return QStringLiteral("-m cgroup --path %1 -j MARK --set-mark %2").arg(cgroupV2KernelPath(), kPacketTag);
+    }
+
+    return QStringLiteral("-m cgroup --cgroup %1 -j MARK --set-mark %2").arg(kCGroupId, kPacketTag);
+}
+}
+
+QString LinuxFirewall::kRtableName = QStringLiteral("10011");
 QString LinuxFirewall::kOutputChain = QStringLiteral("OUTPUT");
 QString LinuxFirewall::kPostRoutingChain = QStringLiteral("POSTROUTING");
 QString LinuxFirewall::kPreRoutingChain = QStringLiteral("PREROUTING");
@@ -308,9 +333,15 @@ void LinuxFirewall::install()
                                                        }, kNatTable);
 
     // Mangle rules
-    installAnchor(Both, QStringLiteral("100.tagPkts"), {
-                                                           QStringLiteral("-m cgroup --cgroup %1 -j MARK --set-mark %2").arg(kCGroupId, kPacketTag)
-                                                       }, kMangleTable, setupTrafficSplitting, teardownTrafficSplitting);
+    //
+    // On cgroup v2, xt_cgroup --path is valid directly in OUTPUT, but fails
+    // when installed into Amnezia's user-defined mangle anchor on this
+    // iptables-nft stack. LinuxSplitTunnel installs the direct OUTPUT rule.
+    if (!isCgroupV2()) {
+        installAnchor(Both, QStringLiteral("100.tagPkts"), {
+                                                               cgroupMatchRule()
+                                                           }, kMangleTable, setupTrafficSplitting, teardownTrafficSplitting);
+    }
 
     // A rule to mitigate CVE-2019-14899 - drop packets addressed to the local
     // VPN IP but that are not actually received on the VPN interface.
@@ -333,7 +364,9 @@ void LinuxFirewall::install()
     // Insert our Raw root chain at the top of the PREROUTING chain.
     linkChain(Both, kRootChain, kPreRoutingChain, true, kRawTable);
 
-    setupTrafficSplitting();
+    if (!isCgroupV2()) {
+        setupTrafficSplitting();
+    }
 }
 
 void LinuxFirewall::uninstall()
@@ -377,7 +410,9 @@ void LinuxFirewall::uninstall()
     // Remove Raw anchors
     uninstallAnchor(Both, QStringLiteral("100.vpnTunOnly"), kRawTable);
 
-    teardownTrafficSplitting();
+    if (!isCgroupV2()) {
+        teardownTrafficSplitting();
+    }
 
     logger.debug() << "LinuxFirewall::uninstall() complete";
 }
@@ -516,9 +551,16 @@ int LinuxFirewall::execute(const QString &command, bool ignoreErrors)
 
 void LinuxFirewall::setupTrafficSplitting()
 {
-    auto cGroupDir = "/sys/fs/cgroup/net_cls/" BRAND_CODE "vpnexclusions/";
+    const QString cGroupDir = isCgroupV2()
+        ? cgroupV2Dir()
+        : QStringLiteral("/sys/fs/cgroup/net_cls/" BRAND_CODE "vpnexclusions");
     logger.info() << "Should be setting up cgroup in" << cGroupDir << "for traffic splitting";
-    execute(QStringLiteral("if [ ! -d %1 ] ; then mkdir %1 ; sleep 0.1 ; echo %2 > %1/net_cls.classid ; fi").arg(cGroupDir).arg(kCGroupId));
+    if (isCgroupV2()) {
+        execute(QStringLiteral("mkdir -p %1").arg(cGroupDir));
+    } else {
+        execute(QStringLiteral("if [ ! -d %1 ] ; then mkdir -p %1 ; sleep 0.1 ; echo %2 > %1/net_cls.classid ; fi")
+                    .arg(cGroupDir, kCGroupId));
+    }
     // Set a rule with priority 100 (lower priority than local but higher than main/default, 0 is highest priority)
     execute(QStringLiteral("if ! ip rule list | grep -q %1 ; then ip rule add from all fwmark %1 lookup %2 pri 100 ; fi").arg(kPacketTag, kRtableName));
 }
