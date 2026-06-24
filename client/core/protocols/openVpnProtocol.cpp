@@ -389,9 +389,9 @@ void OpenVpnProtocol::updateVpnGateway(const QString &line)
                 // but split tunneling must activate regardless of kill switch setting.
                 m_configData.insert(
                         "vpnServer",
-                        NetworkUtilities::getIPAddress(m_configData.value(amnezia::config_key::hostName).toString()));
+                        NetworkUtilities::getIPAddress(m_configData.value(amnezia::configKey::hostName).toString()));
                 qDebug() << "[SplitTunnel] Linux: calling enableKillSwitch, splitTunnelApps="
-                         << m_configData.value(amnezia::config_key::splitTunnelApps).toArray().size() << "apps";
+                         << m_configData.value(amnezia::configKey::splitTunnelApps).toArray().size() << "apps";
                 bool ifaceOk = false;
                 IpcClient::withInterface([&](QSharedPointer<IpcInterfaceReplica> iface) {
                     ifaceOk = true;

@@ -269,8 +269,7 @@ bool KillSwitch::enablePeerTraffic(const QJsonObject &configStr)
     return true;
 }
 
-bool KillSwitch::enableKillSwitch(const QJsonObject &configStr, int vpnAdapterIndex)
-{
+bool KillSwitch::enableKillSwitch(const QJsonObject &configStr, int vpnAdapterIndex) {
 #ifdef Q_OS_WIN
     if (configStr.value("splitTunnelType").toInt() != 0) {
         WindowsFirewall::create(this)->allowAllTraffic();
@@ -307,126 +306,94 @@ bool KillSwitch::enableKillSwitch(const QJsonObject &configStr, int vpnAdapterIn
 #endif
 
 #ifdef Q_OS_LINUX
-    if (QVariant(configStr.value(amnezia::config_key::killSwitchOption).toString()).toBool()) {
-        if (!LinuxFirewall::isInstalled()) {
-            LinuxFirewall::install();
+    if (!LinuxFirewall::isInstalled()) {
+        LinuxFirewall::install();
+    }
+
+    // double-check + ensure our firewall is installed and enabled
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("000.allowLoopback"), true);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("100.blockAll"), blockAll);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("110.allowNets"), allowNets);
+    LinuxFirewall::updateAllowNets(allownets);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("120.blockNets"), blockAll);
+    LinuxFirewall::updateBlockNets(blocknets);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("200.allowVPN"), true);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv6, QStringLiteral("250.blockIPv6"), true);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("290.allowDHCP"), true);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("300.allowLAN"), true);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("310.blockDNS"), true);
+
+    QStringList dnsServers;
+    dnsServers.append(configStr.value(amnezia::configKey::dns1).toString());
+
+    // We don't use secondary DNS if primary DNS is AmneziaDNS
+    if (!configStr.value(amnezia::configKey::dns1).toString().contains(amnezia::protocols::dns::amneziaDnsIp)) {
+        dnsServers.append(configStr.value(amnezia::configKey::dns2).toString());
+    }
+
+    dnsServers.append("127.0.0.1");
+    dnsServers.append("127.0.0.53");
+
+    for (auto dns : configStr.value(amnezia::configKey::allowedDnsServers).toArray()) {
+        if (!dns.isString()) {
+            break;
         }
+        dnsServers.append(dns.toString());
+    }
 
-        // double-check + ensure our firewall is installed and enabled
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("000.allowLoopback"), true);
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("100.blockAll"), blockAll);
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("110.allowNets"), allowNets);
-        LinuxFirewall::updateAllowNets(allownets);
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("120.blockNets"), blockAll);
-        LinuxFirewall::updateBlockNets(blocknets);
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("200.allowVPN"), true);
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv6, QStringLiteral("250.blockIPv6"), true);
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("290.allowDHCP"), true);
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("300.allowLAN"), true);
-        LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("310.blockDNS"), true);
-        QStringList dnsServers;
+    LinuxFirewall::updateDNSServers(dnsServers);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("320.allowDNS"), true);
+    LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("400.allowPIA"), true);
 
-        dnsServers.append(configStr.value(amnezia::configKey::dns1).toString());
-
-        // We don't use secondary DNS if primary DNS is AmneziaDNS
-        if (!configStr.value(amnezia::configKey::dns1).toString().contains(amnezia::protocols::dns::amneziaDnsIp)) {
-            dnsServers.append(configStr.value(amnezia::configKey::dns2).toString());
+    InterfaceConfig appSplitConfig;
+    appSplitConfig.m_serverIpv4AddrIn = configStr.value("vpnServer").toString();
+    for (const QJsonValue &app : configStr.value(amnezia::configKey::splitTunnelApps).toArray()) {
+        if (!app.isString()) {
+            continue;
         }
+        appSplitConfig.m_vpnDisabledApps.append(app.toString());
+    }
 
-        dnsServers.append("127.0.0.1");
-        dnsServers.append("127.0.0.53");
-
-        for (auto dns : configStr.value(amnezia::configKey::allowedDnsServers).toArray()) {
-            if (!dns.isString()) {
-                break;
-            }
-
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("000.allowLoopback"), true);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("100.blockAll"), blockAll);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("110.allowNets"), allowNets);
-            LinuxFirewall::updateAllowNets(allownets);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("120.blockNets"), blockAll);
-            LinuxFirewall::updateBlockNets(blocknets);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("200.allowVPN"), true);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv6, QStringLiteral("250.blockIPv6"), true);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("290.allowDHCP"), true);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("300.allowLAN"), true);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("310.blockDNS"), true);
-
-            QStringList dnsServers;
-            dnsServers.append(configStr.value(amnezia::config_key::dns1).toString());
-            if (!configStr.value(amnezia::config_key::dns1).toString().contains(amnezia::protocols::dns::amneziaDnsIp)) {
-                dnsServers.append(configStr.value(amnezia::config_key::dns2).toString());
-            }
-            dnsServers.append("127.0.0.1");
-            dnsServers.append("127.0.0.53");
-            for (auto dns : configStr.value(amnezia::config_key::allowedDnsServers).toArray()) {
-                if (!dns.isString())
-                    break;
-                dnsServers.append(dns.toString());
-            }
-            LinuxFirewall::updateDNSServers(dnsServers);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::IPv4, QStringLiteral("320.allowDNS"), true);
-            LinuxFirewall::setAnchorEnabled(LinuxFirewall::Both, QStringLiteral("400.allowPIA"), true);
-        }
-
-        // App-based split tunneling — always activate regardless of kill switch setting.
-        {
-            InterfaceConfig config;
-            config.m_serverIpv4AddrIn = configStr.value("vpnServer").toString();
-            QJsonArray appsArray = configStr.value(amnezia::config_key::splitTunnelApps).toArray();
-            qDebug() << "[SplitTunnel] enableKillSwitch called, vpnServer=" << config.m_serverIpv4AddrIn
-                     << "splitTunnelApps count=" << appsArray.size();
-            for (const QJsonValue &v : appsArray) {
-                if (v.isString()) {
-                    config.m_vpnDisabledApps.append(v.toString());
-                    qDebug() << "[SplitTunnel] app:" << v.toString();
-                }
-            }
-            qDebug() << "[SplitTunnel] calling prepareActivation, vpnDisabledApps count="
-                     << config.m_vpnDisabledApps.size();
-            LinuxDaemon::instance()->prepareActivation(config);
-            LinuxDaemon::instance()->activateSplitTunnel(config);
-            qDebug() << "[SplitTunnel] activateSplitTunnel done";
-        }
+    LinuxDaemon::instance()->prepareActivation(appSplitConfig);
+    LinuxDaemon::instance()->activateSplitTunnel(appSplitConfig);
 #endif
 
 #ifdef Q_OS_MACOS
-        // double-check + ensure our firewall is installed and enabled. This is necessary as
-        // other software may disable pfctl before re-enabling with their own rules (e.g other VPNs)
-        if (!MacOSFirewall::isInstalled())
-            MacOSFirewall::install();
+    // double-check + ensure our firewall is installed and enabled. This is necessary as
+    // other software may disable pfctl before re-enabling with their own rules (e.g other VPNs)
+    if (!MacOSFirewall::isInstalled())
+        MacOSFirewall::install();
 
-        MacOSFirewall::ensureRootAnchorPriority();
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("000.allowLoopback"), true);
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("100.blockAll"), blockAll);
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("110.allowNets"), allowNets);
-        MacOSFirewall::setAnchorTable(QStringLiteral("110.allowNets"), allowNets, QStringLiteral("allownets"), allownets);
+    MacOSFirewall::ensureRootAnchorPriority();
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("000.allowLoopback"), true);
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("100.blockAll"), blockAll);
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("110.allowNets"), allowNets);
+    MacOSFirewall::setAnchorTable(QStringLiteral("110.allowNets"), allowNets, QStringLiteral("allownets"), allownets);
 
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("120.blockNets"), blockNets);
-        MacOSFirewall::setAnchorTable(QStringLiteral("120.blockNets"), blockNets, QStringLiteral("blocknets"), blocknets);
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("200.allowVPN"), true);
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("250.blockIPv6"), true);
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("290.allowDHCP"), true);
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("300.allowLAN"), true);
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("120.blockNets"), blockNets);
+    MacOSFirewall::setAnchorTable(QStringLiteral("120.blockNets"), blockNets, QStringLiteral("blocknets"), blocknets);
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("200.allowVPN"), true);
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("250.blockIPv6"), true);
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("290.allowDHCP"), true);
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("300.allowLAN"), true);
 
-        QStringList dnsServers;
-        dnsServers.append(configStr.value(amnezia::configKey::dns1).toString());
+    QStringList dnsServers;
+    dnsServers.append(configStr.value(amnezia::configKey::dns1).toString());
 
-        // We don't use secondary DNS if primary DNS is AmneziaDNS
-        if (!configStr.value(amnezia::configKey::dns1).toString().contains(amnezia::protocols::dns::amneziaDnsIp)) {
-            dnsServers.append(configStr.value(amnezia::configKey::dns2).toString());
-        }
-
-        for (auto dns : configStr.value(amnezia::configKey::allowedDnsServers).toArray()) {
-            if (!dns.isString()) {
-                break;
-            }
-            dnsServers.append(dns.toString());
-        }
-
-        MacOSFirewall::setAnchorEnabled(QStringLiteral("310.blockDNS"), true);
-        MacOSFirewall::setAnchorTable(QStringLiteral("310.blockDNS"), true, QStringLiteral("dnsaddr"), dnsServers);
-#endif
-        return true;
+    // We don't use secondary DNS if primary DNS is AmneziaDNS
+    if (!configStr.value(amnezia::configKey::dns1).toString().contains(amnezia::protocols::dns::amneziaDnsIp)) {
+        dnsServers.append(configStr.value(amnezia::configKey::dns2).toString());
     }
+
+    for (auto dns : configStr.value(amnezia::configKey::allowedDnsServers).toArray()) {
+        if (!dns.isString()) {
+            break;
+        }
+        dnsServers.append(dns.toString());
+    }
+
+    MacOSFirewall::setAnchorEnabled(QStringLiteral("310.blockDNS"), true);
+    MacOSFirewall::setAnchorTable(QStringLiteral("310.blockDNS"), true, QStringLiteral("dnsaddr"), dnsServers);
+#endif
+    return true;
+}

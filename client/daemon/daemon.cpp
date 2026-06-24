@@ -154,6 +154,10 @@ bool Daemon::activate(const InterfaceConfig& config) {
     }
   }
 
+#ifdef Q_OS_LINUX
+  activateSplitTunnel(config);
+#endif
+
   bool status = run(Up, config);
   logger.debug() << "Connection status:" << status;
   if (status) {
@@ -480,6 +484,11 @@ bool Daemon::deactivate(bool emitSignals) {
     wgutils()->deleteExclusionRoute(iterator.key());
   }
   m_excludedAddrSet.clear();
+
+#ifdef Q_OS_LINUX
+  InterfaceConfig emptySplitTunnelConfig;
+  activateSplitTunnel(emptySplitTunnelConfig);
+#endif
 
   m_connections.clear();
   // Delete the interface
